@@ -3,14 +3,35 @@ import torch.nn as nn
 import numpy as np
 
 
-class Network1D(nn.Module):
-
-    def __init__(self, x_dim, y_dim, hidden_dim=(32,), device='cpu'):
-        # type: (tuple, tuple, tuple, str) -> None
+class Network(nn.Module):
+    def __init__(self, x_dim, y_dim, device='cpu'):
+        # type: (tuple, tuple, str) -> None
         super().__init__()
         self.x_dim = x_dim
         self.y_dim = y_dim
         self.device = device
+
+    def get_z_dim(self) -> tuple:
+        return self.z_dim
+
+    def get_x_dim(self) -> tuple:
+        return self.x_dim
+
+    def apply_tensor_constraints(self, x: torch.Tensor) -> torch.Tensor:
+        if isinstance(x, np.ndarray):
+            x = torch.from_numpy(x).to(dtype=torch.float32)
+        assert isinstance(x, torch.FloatTensor)
+        if len(tuple(x.shape)) == 1:  # Add batch dimension to 1D tensor
+            x = x.unsqueeze(0)
+        x = x.to(self.device)
+        return x
+
+
+class Network1D(Network):
+
+    def __init__(self, x_dim, y_dim, hidden_dim=(32,), device='cpu'):
+        # type: (tuple, tuple, tuple, str) -> None
+        super().__init__(x_dim, y_dim, device)
         self.hidden_dim = hidden_dim
         self.layers = []
         h_dim_prev = x_dim[0]
@@ -25,23 +46,30 @@ class Network1D(nn.Module):
         s_t = self.apply_tensor_constraints(s_t)
         return self.model(s_t)
 
-    def apply_tensor_constraints(self, x: torch.Tensor) -> torch.Tensor:
-        if isinstance(x, np.ndarray):
-            x = torch.from_numpy(x).to(dtype=torch.float32)
-        assert isinstance(x, torch.FloatTensor)
-        if len(tuple(x.shape)) == 1:  # Add batch dimension to 1D tensor
-            x = x.unsqueeze(0)
-        x = x.to(self.device)
-        return x
 
-    def get_z_dim(self) -> tuple:
-        return self.z_dim
+class Network1DStochastic(Network):
 
-    def get_x_dim(self) -> tuple:
-        return self.x_dim
+    def __init__(self, x_dim, y_dim, hidden_dim=(32,), device='cpu'):
+        # type: (tuple, tuple, tuple, str) -> None
+        super().__init__(x_dim, y_dim, device)
+        self.hidden_dim = hidden_dim
+        self.layers = []
+        h_dim_prev = x_dim[0]
+        for h_dim in hidden_dim:
+            self.layers.append(nn.Linear(h_dim_prev, h_dim))
+            self.layers.append(nn.ReLU())
+            h_dim_prev = h_dim
+        self.model = nn.Sequential(*self.layers).to(self.device)
+        self.mu_head = nn.Linear(h_dim_prev, y_dim[0])
+        self.sigma_head = nn.Sequential(nn.Linear(h_dim_prev, y_dim[0]), nn.ReLU())
+
+    def forward(self, s_t: torch.Tensor) -> (torch.Tensor, torch.Tensor):
+        s_t = self.apply_tensor_constraints(s_t)
+        x = self.model(s_t)
+        return self.mu_head(x), self.sigma_head(x)
 
 
-class Network2D(nn.Module):
+class Network2D(Network):
 
     class Flatten(nn.Module):
         def forward(self, x):
@@ -49,10 +77,7 @@ class Network2D(nn.Module):
 
     def __init__(self, x_dim, y_dim, fc_dim=512, device='cpu', **kwargs):
         # type: (tuple, tuple, int, str, dict) -> None
-        super().__init__()
-        self.x_dim = x_dim
-        self.y_dim = y_dim
-        self.device = device
+        super().__init__(x_dim, y_dim, device)
         self.conv_layers = kwargs['conv_layers']
         self.layers = []
         prev_channels = x_dim[0]
@@ -72,7 +97,7 @@ class Network2D(nn.Module):
         self.layers.append(nn.Linear(prev_dim_x * prev_dim_y * prev_channels, fc_dim))
         self.layers.append(nn.ReLU())
         self.layers.append(nn.Linear(fc_dim, y_dim[0]))
-        self.model = nn.Sequential(*self.layers).to(device=device)#, memory_format=torch.channels_last)
+        self.model = nn.Sequential(*self.layers).to(device=device)
 
     def forward(self, s_t: torch.Tensor) -> torch.Tensor:
         s_t = self.apply_tensor_constraints(s_t)
@@ -90,8 +115,3 @@ class Network2D(nn.Module):
         assert tuple(x.shape[1:]) == self.x_dim, f'{ tuple(x.shape[1:])} {self.x_dim}'
         return x
 
-    def get_z_dim(self) -> tuple:
-        return self.z_dim
-
-    def get_x_dim(self) -> tuple:
-        return self.x_dim

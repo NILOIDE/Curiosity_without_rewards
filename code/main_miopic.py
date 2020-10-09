@@ -34,7 +34,7 @@ def main(env, visualise, folder_name, **kwargs):
     shutil.copyfile(os.path.abspath(__file__), folder_name + 'main.py')
     obs_dim = tuple(env.observation_space.sample().shape)
     assert len(obs_dim) == 1 or len(obs_dim) == 3, f'States should be 1D or 3D vector. Received: {obs_dim}'
-    a_dim = (1,) #env.action_space
+    a_dim = tuple(env.action_space.sample().shape)
     print('Observation space:', obs_dim)
     print('Action space:', a_dim)
     device = 'cpu' #'cuda' if torch.cuda.is_available() else 'cpu'
@@ -60,21 +60,16 @@ def main(env, visualise, folder_name, **kwargs):
     scores = {'train': [], 'eval': []}
     start_time = datetime.now()
     buffer = DynamicsReplayBuffer(kwargs['buffer_size'], device)
-    while True:
+    while trainer.train_steps < kwargs['train_steps']:
         done = False
         s_t = env.reset()
         env.render()
         score = 0
         while not done:
             a_t = policy.act(torch.from_numpy(s_t).to(dtype=torch.float32, device=device)).numpy()
-            if a_t > 0.0:
-                a = 1
-            else:
-                a = 0
-            s_tp1, r_t, done, info = env.step(a)
+            s_tp1, r_t, done, info = env.step(a_t)
             env.render()
-            # scores['train'].append(r_t)
-            score += 1
+            score += r_t
             buffer.add(s_t, a_t, s_tp1, done)
             if trainer.train_steps < kwargs['train_steps']:
                 xs_t, as_t, xs_tp1, dones = buffer.sample(kwargs['batch_size'])

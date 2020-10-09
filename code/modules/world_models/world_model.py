@@ -33,7 +33,10 @@ class EncodedWorldModel(nn.Module):
         # type: (torch.Tensor, torch.Tensor) -> torch.Tensor
         with torch.no_grad():
             z_t = self.encoder(x_t)
-            z_tp1_prime = self.network(z_t, a_t)
+            if self.target_network is None:
+                z_tp1_prime = self.network(z_t, a_t)
+            else:
+                z_tp1_prime = self.target_network(z_t, a_t)
         return z_tp1_prime
 
     def forward(self, x_t, a_t):
@@ -93,7 +96,10 @@ class WorldModel(nn.Module):
     def predict(self, x_t, a_t):
         # type: (torch.Tensor, torch.Tensor) -> torch.Tensor
         with torch.no_grad():
-            x_tp1_prime = self.network(x_t, a_t)
+            if self.target_network is None:
+                x_tp1_prime = self.network(x_t, a_t)
+            else:
+                x_tp1_prime = self.target_network(x_t, a_t)
         return x_tp1_prime
 
     def get_target(self, x_tp1):

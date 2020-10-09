@@ -35,18 +35,13 @@ class SimpleGridWorld(gym.Env):
 
     def _create_info_dict(self):
         info = {'steps': self.t,
-                'distance': abs(self.pos[0] - self.start_pos[0]) + abs(self.pos[1] - self.start_pos[1]),
                 'counts': self.visitation_count,
                 'density': self.visitation_count / len(self.visitation_history)
                 if len(self.visitation_history) > 0 else self.visitation_count}
         # Count of unique states visited
         self.visited_states = (self.visitation_count > 0)
         visited_sum = self.visited_states.sum()
-        # info['visited_states'] = np.array(self.get_unique_visited_states())
-        info['unique_states'] = visited_sum if visited_sum > 0.0 else 1.0
-        info['uniform_diff'] = np.abs(self.uniform_prob_map - info['density']).sum()
-        info['uniform_diff_visited'] = (np.abs(self.visited_states / info['unique_states']
-                                               - info['density']) * self.visited_states).sum()
+        info['unique_states'] = max(visited_sum, 1.0)
         return info
 
     def step(self, a: int):
@@ -63,7 +58,7 @@ class SimpleGridWorld(gym.Env):
         s = self._index_to_grid(self.pos).reshape((-1,))
         self.last_state = s
         self.update_visitation_counts()
-        return s, info['uniform_diff'], False, info
+        return s, 0, False, info
 
     def update_visitation_counts(self):
         self.visitation_count[tuple(self.pos)] += 1
@@ -179,7 +174,7 @@ class GridWorldRandFeatures(SimpleGridWorld):
         s = self.state_features[tuple(self.pos)]
         self.last_state = s
         self.update_visitation_counts()
-        return s, info['uniform_diff'], False, info
+        return s, 0, False, info
 
     def get_states(self):
         states = []
@@ -227,82 +222,6 @@ class GridWorldRandFeatures(SimpleGridWorld):
         return states
 
 
-class GridWorldSubspaces(SimpleGridWorld):
-    def __init__(self, size: tuple, **kwargs):
-        super().__init__(size=size, **kwargs)
-        self.subspace_size = (10, 10)
-        self.subspace_feature_length = 10
-        self.subspace_features = np.random.uniform(low=0.0, high=1.0, size=(*size, self.subspace_feature_length))
-        # How many super spaces per grid dimension
-        self.superspace_size = tuple(i // j + 1 for i, j in zip(size, self.subspace_size))
-        self.observation_space = spaces.MultiBinary(n=int(self.subspace_feature_length + np.prod(self.superspace_size)))
-
-    def reset(self):
-        self.t = 0
-        self.pos = copy.copy(self.start_pos)
-        s = np.concatenate((self._superspace_feature(self.pos), self._subspace_feature(self.pos)))
-        self.last_state = s
-        self.update_visitation_counts()
-        return s.reshape((-1,))
-
-    def _create_info_dict(self):
-        info = {'steps': self.t,
-                'counts': self.visitation_count,
-                'density': self.visitation_count / len(self.visitation_history)
-                if len(self.visitation_history) > 0 else self.visitation_count}
-        # Count of unique states visited
-        self.visited_states = (self.visitation_count > 0)
-        visited_sum = self.visited_states.sum()
-        info['unique_states'] = visited_sum if visited_sum > 0.0 else 1.0
-        # Policy-Uniform difference
-        info['uniform_diff'] = np.abs(self.uniform_prob_map - info['density']).sum()
-        info['uniform_diff_visited'] = (np.abs(self.visited_states / info['unique_states']
-                                               - info['density']) * self.visited_states).sum()
-        return info
-
-    def step(self, a):
-        self.t += 1
-        info = self._create_info_dict()
-        dim = (a - 1) // 2
-        assert 0 <= a < self.n_dims * 2 + 1, 'Invalid action: 0 <= a < ' + str(self.n_dims * 2 + 1)
-        direction = (a - 1) % 2
-        if a != 0:
-            if direction == 0:
-                if self.pos[dim] > 0:
-                    self.pos[dim] -= 1
-            else:
-                if self.pos[dim] < self.size[dim] - 1:
-                    self.pos[dim] += 1
-        s = np.concatenate((self._superspace_feature(self.pos), self._subspace_feature(self.pos)))
-        assert len(s.shape) == 1
-        self.last_state = s
-        self.update_visitation_counts()
-        return s, info['uniform_diff'], False, info
-
-    def _superspace_feature(self, pos):
-        superspace = []
-        for i in range(len(pos)):
-            superspace.append(pos[i] // self.subspace_size[i])
-        feature = np.zeros((np.prod(self.superspace_size, )))
-        # Only works for 2D gridworld
-        idx = superspace[0] + superspace[1] * self.superspace_size[0]
-        feature[idx] = 1.0
-        return feature
-
-    def _subspace_feature(self, pos):
-        feature = self.subspace_features[pos[0], pos[1], :]
-        return feature
-
-    def get_states(self):
-        states = []
-        for i in range(self.size[0]):
-            for j in range(self.size[1]):
-                pos = [i, j]
-                s = np.concatenate((self._superspace_feature(pos), self._subspace_feature(pos)))
-                states.append(s)
-        return states
-
-
 class GridWorldLoad(SimpleGridWorld):
     def __init__(self, map_path: str = 'maps/Box.txt', **kwargs):
         self.map = self.load_map(map_path)
@@ -320,14 +239,10 @@ class GridWorldLoad(SimpleGridWorld):
         # Count of unique states visited
         self.visited_states = (self.visitation_count > 0).astype(np.float)
         visited_sum = self.visited_states.sum()
-        info['unique_states'] = visited_sum if visited_sum > 0.0 else 1.0
-        # Policy-Uniform difference
-        info['uniform_diff'] = np.abs(self.uniform_prob_map - info['density']).sum()
-        info['uniform_diff_visited'] = (np.abs(self.visited_states / info['unique_states']
-                                               - info['density']) * self.visited_states).sum()
+        info['unique_states'] = max(visited_sum, 1.0)
         return info
 
-    def step(self, a):
+    def step(self, a: int):
         self.t += 1
         info = self._create_info_dict()
         dim = (a - 1) // 2
@@ -342,7 +257,7 @@ class GridWorldLoad(SimpleGridWorld):
         s = self._index_to_grid(self.pos).reshape((-1,))
         self.last_state = s
         self.update_visitation_counts()
-        return s, info['uniform_diff'], False, info
+        return s, 0, False, info
 
     def check_collision(self, dim: int, direction: int) -> bool:
         """"
@@ -445,6 +360,26 @@ class GridWorldLoad(SimpleGridWorld):
         return states, neighbours
 
 
+class GridWorldContinuousAction(SimpleGridWorld):
+    def __init__(self, size: tuple, **kwargs):
+        super().__init__(size=size, **kwargs)
+        self.action_space = spaces.Box(low=-1., high=1., shape=(2,))
+
+    def step(self, a: np.ndarray):
+        self.t += 1
+        info = self._create_info_dict()
+        a = a.reshape((-1,))
+        for i, value in enumerate(a):
+            if value < -0.25:
+                self.pos[i] = (self.pos[i] - 1) % self.size[i]
+            elif value > 0.25:
+                self.pos[i] = (self.pos[i] + 1) % self.size[i]
+        s = self._index_to_grid(self.pos).reshape((-1,))
+        self.last_state = s
+        self.update_visitation_counts()
+        return s, 0, False, info
+
+
 class GridWorld10x10(SimpleGridWorld):
     def __init__(self):
         super(GridWorld10x10, self).__init__(size=(10, 10))
@@ -460,14 +395,14 @@ class GridWorld42x42(SimpleGridWorld):
         super(GridWorld42x42, self).__init__(size=(42, 42))
 
 
+class GridWorldContinuousAction42x42(GridWorldContinuousAction):
+    def __init__(self):
+        super(GridWorldContinuousAction42x42, self).__init__(size=(42, 42))
+
+
 class GridWorldRandFeatures42x42(GridWorldRandFeatures):
     def __init__(self):
         super(GridWorldRandFeatures42x42, self).__init__(size=(42, 42))
-
-
-class GridWorldSubspace50x50(GridWorldSubspaces):
-    def __init__(self):
-        super(GridWorldSubspace50x50, self).__init__(size=(50, 50))
 
 
 class GridWorldBox11x11(GridWorldLoad):

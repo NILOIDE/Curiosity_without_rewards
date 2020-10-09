@@ -4,27 +4,69 @@ import csv
 import sys
 import os
 
-np.set_printoptions(threshold=sys.maxsize)
-
 
 class Visualise:
+    class IterationStorage:
+        class Train:
+            def __init__(self):
+                self.policy_loss = None  # type: float
+                self.wm_loss = None  # type: float
+                self.encoder_loss = None  # type: float
+                self.unique_states = None  # type: float
+                self.int_rewards = None  # type: float
+                self.ext_rewards = None  # type: float
+                self.folder = "Training/"
+
+        class Eval:
+            def __init__(self):
+                self.wm_loss = None  # type: float
+                self.int_rewards = None  # type: float
+                self.ext_rewards = None  # type: float
+                self.density_map = None  # type: np.ndarray
+                self.pe_map = None  # type: np.ndarray
+                self.q_map = None  # type: np.ndarray
+                self.walls_map = None  # type: np.ndarray
+                self.folder = "Evaluation/"
+
+        def __init__(self):
+            self.train = self.Train()
+            self.eval = self.Eval()
+
+        def get_train_iteration_data(self) -> dict:
+            items = {self.train.folder + "Policy loss": self.train.policy_loss,
+                     self.train.folder + "WM loss": self.train.wm_loss,
+                     self.train.folder + "Encoder loss": self.train.encoder_loss,
+                     self.train.folder + "Unique states visited": self.train.unique_states,
+                     self.train.folder + "Mean ep intrinsic rewards": self.train.int_rewards,
+                     self.train.folder + "Mean ep extrinsic rewards": self.train.ext_rewards
+                     }
+            return {key: value for key, value in items.items() if value is not None}
+
+        def get_eval_iteration_data(self) -> dict:
+            items = {self.eval.folder + "WM loss": self.eval.wm_loss,
+                     self.eval.folder + "Mean ep intrinsic rewards": self.eval.int_rewards,
+                     self.eval.folder + "Mean ep extrinsic rewards": self.eval.ext_rewards,
+                     self.eval.folder + "Visitation densities": self.eval.density_map,
+                     self.eval.folder + "Prediction error map": self.eval.pe_map,
+                     self.eval.folder + "Q-value map": self.eval.q_map,
+                     }
+            return {key: value for key, value in items.items() if value is not None}
+
     def __init__(self, run_name, **kwargs):
         super(Visualise, self).__init__()
-
         self.vis_args = kwargs
         self.folder_name = run_name
         os.makedirs(run_name, exist_ok=True)
         self.writer = SummaryWriter(self.folder_name)
         self.train_interval = kwargs['export_interval']
         self.eval_interval = kwargs['eval_interval']
-        self.train_id = self.train_interval  # train count for visualisation
+        self.train_id = 0  # train count for visualisation
         self.eval_id = 0  # valid count for visualisation
-        # os.mkdir('results/' + kwargs['name'])
         with open(f'{self.folder_name}/params{kwargs["time_stamp"]}.csv', mode='w') as f:
             csv_writer = csv.writer(f)
             for key, value in kwargs.items():
                 csv_writer.writerow([key, value])
-        # self.train_iteration_update(ext=0.0, int=0.0, wm_loss=0.0, alg_loss=0.0)
+        self.storage = self.IterationStorage()
 
     @staticmethod
     def normalize(img: np.ndarray) -> np.ndarray:
@@ -41,100 +83,30 @@ class Visualise:
         new_img = img / max if max != 0.0 else img
         return new_img
 
-    def train_iteration_update(self, t=None, **kwargs):
+    def train_iteration_update(self, t: int = None):
         if t is None:
-            t = self.train_id
             self.train_id += self.train_interval
-            if 'policy_loss' in kwargs:
-                self.writer.add_scalar("Training/Policy loss", kwargs['policy_loss'], t)
-            if 'wm_loss' in kwargs:
-                self.writer.add_scalar("Training/WM loss", kwargs['wm_loss'], t)
-            if 'encoder_loss' in kwargs:
-                self.writer.add_scalar("Training/Encoder loss", kwargs['enc_loss'], t)
+            t = self.train_id
+        for key, value in self.storage.get_train_iteration_data().items():
+            self.writer.add_scalar(key, value, t)
 
-            if 'info' in kwargs:
-                if 'unique_states' in kwargs['info']:
-                    self.writer.add_scalar("Training/Unique states visited",
-                                           kwargs['info']['unique_states'], self.eval_id)
-                if 'uniform_diff' in kwargs['info']:
-                    self.writer.add_scalar("Training/Policy-Uniform difference",
-                                           kwargs['info']['uniform_diff'], self.eval_id)
-                if 'uniform_diff_visited' in kwargs['info']:
-                    self.writer.add_scalar("Training/Policy-Uniform difference visited states",
-                                           kwargs['info']['uniform_diff_visited'], self.eval_id)
-
-        self.writer.add_scalar("Training/Mean ep extrinsic rewards", kwargs['ext'], t)
-
-    def eval_iteration_update(self, ext, int, std_ext=None):
-        self.writer.add_scalar("Evaluation/Mean ep extrinsic rewards", ext, self.eval_id)
-        if std_ext is not None:
-            self.writer.add_scalar("Evaluation/SD ep extrinsic rewards", ext, self.eval_id)
-        self.eval_id += self.eval_interval
-
-    def eval_gridworld_iteration_update(self, **kwargs):
-        density_map, pe_map, q_map = None, None, None
-        if 'density_map' in kwargs:
-            if len(kwargs['density_map'].shape) == 2:
-                kwargs['density_map'] = np.expand_dims(kwargs['density_map'], axis=0)
-            # Clipped
-            density_map = self.normalize(kwargs['density_map'].clip(max=0.01))
-            if 'walls_map' in kwargs and kwargs['walls_map'] is not None:
-                density_map_rgb = np.concatenate((density_map,
-                                                  density_map + kwargs['walls_map'],
-                                                  density_map), axis=0)
-                self.writer.add_image("Evaluation/Visitation densities (clipped)", density_map_rgb, self.eval_id)
+    def eval_iteration_update(self, t: int = None):
+        if t is None:
+            self.eval_id += self.eval_interval
+            t = self.eval_id
+        for key, item in self.storage.get_eval_iteration_data().items():
+            if isinstance(item, float):
+                self.writer.add_scalar(key, item, t)
+            elif isinstance(item, np.ndarray):
+                if len(item.shape) == 2:
+                    item = np.expand_dims(item, axis=0)
+                item = self.normalize(item.clip(max=0.01))
+                if self.storage.eval.walls_map is not None:
+                    item = np.concatenate((item, item + self.storage.eval.walls_map, item), axis=0)
+                self.writer.add_image(key, item, t)
             else:
-                self.writer.add_image("Evaluation/Visitation densities (clipped)", density_map, self.eval_id)
-            # Not clipped
-            density_map = self.normalize(kwargs['density_map'])
-            if 'walls_map' in kwargs and kwargs['walls_map'] is not None:
-                density_map_rgb = np.concatenate((density_map,
-                                                  density_map + kwargs['walls_map'],
-                                                  density_map), axis=0)
-                self.writer.add_image("Evaluation/Visitation densities", density_map_rgb, self.eval_id)
-            else:
-                self.writer.add_image("Evaluation/Visitation densities", density_map, self.eval_id)
-        if 'pe_map' in kwargs and kwargs['pe_map'] is not None:
-            if len(kwargs['pe_map'].shape) == 2:
-                kwargs['pe_map'] = np.expand_dims(kwargs['pe_map'], axis=0)
-            # Remove nodes that are walls
-            if 'walls_map' in kwargs and kwargs['walls_map'] is not None:
-                kwargs['pe_map'] = kwargs['pe_map'] * (1 - kwargs['walls_map'])
-            # Add scalar before normalising
-            self.writer.add_scalar("Evaluation/Prediction error map sum", kwargs['pe_map'].sum(), self.eval_id)
-            pe_map = self.normalize(kwargs['pe_map'])
-            # Display walls as red if map walls are given by converting error map to RGB
-            if 'walls_map' in kwargs and kwargs['walls_map'] is not None:
-                pe_map_rgb = np.concatenate((pe_map,
-                                             pe_map + kwargs['walls_map'],
-                                             pe_map), axis=0)
-                self.writer.add_image("Evaluation/Prediction error map", pe_map_rgb, self.eval_id)
-            else:
-                self.writer.add_image("Evaluation/Prediction error map", pe_map, self.eval_id)
-            # Density-Error RGB mix
-            if density_map is not None and kwargs['walls_map'] is not None:
-                overlap = np.concatenate((pe_map,
-                                          np.zeros_like(density_map) + kwargs['walls_map'],
-                                          density_map), axis=0)
-                self.writer.add_image("Evaluation/Density and Prediction error overlap", overlap, self.eval_id)
-        if 'q_map' in kwargs and kwargs['q_map'] is not None:
-            if len(kwargs['q_map'].shape) == 2:
-                kwargs['q_map'] = np.expand_dims(kwargs['q_map'], axis=0)
-            # Remove nodes that are walls
-            if 'walls_map' in kwargs and kwargs['walls_map'] is not None:
-                kwargs['q_map'] = kwargs['q_map'] * (1 - kwargs['walls_map'])
-            # Add scalar before normalising
-            self.writer.add_scalar("Evaluation/Argmax Q-value map sum", kwargs['q_map'].sum(), self.eval_id)
-            q_map = self.normalize(kwargs['q_map'])
-            # Display walls as red if map walls are given by converting error map to RGB
-            if 'walls_map' in kwargs and kwargs['walls_map'] is not None:
-                q_map_rgb = np.concatenate((q_map,
-                                            q_map + kwargs['walls_map'],
-                                            q_map), axis=0)
-                self.writer.add_image("Evaluation/Argmax Q-value map", q_map_rgb, self.eval_id)
-            else:
-                self.writer.add_image("Evaluation/Argmax Q-value map", q_map, self.eval_id)
-        self.eval_id += self.eval_interval
+                raise TypeError(f'Received item "{key}" is of wrong object type. Expected "float" or "np.ndarray", '
+                                f'received "{type(item)}"')
 
     def close(self):
         self.writer.close()
